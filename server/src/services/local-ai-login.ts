@@ -55,8 +55,8 @@ const browserLogins = new Map<string, LocalBrowserLoginState>();
 /** Local sign-ins share the durable attempt/credential lifecycle, but never seed
  * their home from the operator's rotating CLI credential. */
 export function localAiLoginService(db: Db) {
-  function stopBrowserLogin(id: string) {
-    browserLogins.get(id)?.abort();
+  async function stopBrowserLogin(id: string) {
+    await browserLogins.get(id)?.abort();
     browserLogins.delete(id);
   }
   function ensureBrowserLogin(id: string, provider: string) {
@@ -74,7 +74,7 @@ export function localAiLoginService(db: Db) {
         const [session] = await tx.select().from(adapterAuthSessions)
           .where(eq(adapterAuthSessions.id, row.id)).for("update");
         if (!session || !session.expiresAt || session.expiresAt.getTime() > Date.now()) return;
-        stopBrowserLogin(row.id);
+        await stopBrowserLogin(row.id);
         await rm(loginHome(row.id), { recursive: true, force: true });
         await tx.update(adapterAuthSessions).set({
           status: session.connectionId ? "authenticated" : "timed_out",
@@ -106,7 +106,7 @@ export function localAiLoginService(db: Db) {
         }
         if (!restart || existing.connectionMethod !== LOCAL_LOGIN_METHOD)
           throw unprocessable("Another sign-in is still open. Finish it, or choose Start sign-in again to replace a local attempt.");
-        stopBrowserLogin(existing.id);
+        await stopBrowserLogin(existing.id);
         await rm(loginHome(existing.id), { recursive: true, force: true });
         await tx.update(adapterAuthSessions).set({ status: "cancelled", finishedAt: new Date(), updatedAt: new Date() })
           .where(eq(adapterAuthSessions.id, existing.id));
@@ -233,7 +233,7 @@ export function localAiLoginService(db: Db) {
       return saved;
     });
     // Failed cleanup can be retried by the same completed attempt or reaper.
-    stopBrowserLogin(id);
+    await stopBrowserLogin(id);
     await rm(loginHome(id), { recursive: true, force: true });
     return result;
   }
@@ -247,7 +247,7 @@ export function localAiLoginService(db: Db) {
         eq(adapterAuthSessions.connectionMethod, LOCAL_LOGIN_METHOD),
       )).for("update");
       if (!session) throw notFound("Local sign-in attempt not found.");
-      stopBrowserLogin(id);
+      await stopBrowserLogin(id);
       await rm(loginHome(id), { recursive: true, force: true });
       if (!session.connectionId && session.status !== "cancelled") {
         await tx.update(adapterAuthSessions).set({
