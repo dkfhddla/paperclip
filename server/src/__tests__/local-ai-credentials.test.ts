@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
 import { readVerifiedLocalAiCredential } from "../services/local-ai-credentials.js";
 const mocks = vi.hoisted(() => ({ claude: vi.fn(), claudeIsolatedKeychain: vi.fn(), codex: vi.fn(), codexQuota: vi.fn(), readFile: vi.fn(), credentialFile: vi.fn() }));
 vi.mock("@paperclipai/adapter-claude-local/server", () => ({ readClaudeToken: mocks.claude, readIsolatedClaudeKeychainToken: mocks.claudeIsolatedKeychain }));
@@ -10,7 +11,7 @@ describe("explicit local subscription import", () => {
   it("verifies Claude only from the selected isolated home, never the host account", async () => {
     mocks.credentialFile.mockResolvedValue(JSON.stringify({ claudeAiOauth: { accessToken: "isolated-claude" } }));
     await expect(readVerifiedLocalAiCredential("anthropic", "/isolated/claude")).resolves.toBe("isolated-claude");
-    expect(mocks.credentialFile).toHaveBeenCalledWith("/isolated/claude/.credentials.json");
+    expect(mocks.credentialFile).toHaveBeenCalledWith(path.join("/isolated/claude", ".credentials.json"));
     expect(mocks.claude).not.toHaveBeenCalled();
   });
   it("does not fall back to ambient Claude auth when an isolated login is absent or invalid", async () => {
@@ -42,7 +43,7 @@ describe("explicit local subscription import", () => {
   it("tries the alternate Claude filename after malformed JSON", async () => {
     mocks.credentialFile.mockResolvedValueOnce("malformed").mockResolvedValueOnce(JSON.stringify({ claudeAiOauth: { accessToken: "alternate-token" } }));
     await expect(readVerifiedLocalAiCredential("anthropic", "/isolated/claude")).resolves.toBe("alternate-token");
-    expect(mocks.credentialFile).toHaveBeenLastCalledWith("/isolated/claude/credentials.json");
+    expect(mocks.credentialFile).toHaveBeenLastCalledWith(path.join("/isolated/claude", "credentials.json"));
     expect(mocks.claude).not.toHaveBeenCalled();
   });
   it("reads Codex refresh credentials only from the isolated login home", async () => {
@@ -52,12 +53,22 @@ describe("explicit local subscription import", () => {
     expect(mocks.codexQuota).toHaveBeenCalledWith("access", "account");
     expect(mocks.codex).toHaveBeenCalledWith("/isolated/login");
   });
+  it("does not treat a successful CLI exit or prompt as a verified Codex account", async () => {
+    mocks.codex.mockResolvedValue(null);
+    await expect(readVerifiedLocalAiCredential("openai", "C:\\isolated\\attempt")).rejects.toThrow("Finish browser sign-in");
+    expect(mocks.codexQuota).not.toHaveBeenCalled();
+  });
+  it("rejects provider verification failures without exposing credentials or provider output", async () => {
+    mocks.codex.mockResolvedValue({ accessToken: "fixture-access", refreshToken: "fixture-refresh", idToken: "fixture-identity" });
+    mocks.codexQuota.mockRejectedValue(new Error("private-provider-output"));
+    await expect(readVerifiedLocalAiCredential("openai", "C:\\isolated\\attempt")).rejects.toThrow(/^Could not verify the local subscription\. Finish browser sign-in for this connection, then try Connect again\.$/);
+  });
   it("verifies a Grok subscription against a fixed endpoint before saving", async () => {
     const credential = JSON.stringify({ "https://issuer.x.ai::11111111-1111-4111-8111-111111111111": { key: "fixture-key", refresh_token: "fixture-refresh" } });
     mocks.readFile.mockResolvedValue(credential);
     const fetch = vi.fn().mockResolvedValue(new Response("{}")); vi.stubGlobal("fetch", fetch);
     await expect(readVerifiedLocalAiCredential("xai", "/isolated/grok")).resolves.toBe(credential);
-    expect(mocks.readFile).toHaveBeenCalledWith("/isolated/grok/auth.json", "utf8");
+    expect(mocks.readFile).toHaveBeenCalledWith(path.join("/isolated/grok", "auth.json"), "utf8");
     expect(fetch).toHaveBeenCalledWith("https://api.x.ai/v1/models", expect.objectContaining({ redirect: "error" }));
   });
   it("rejects missing and invalid logins with actionable, redacted errors", async () => {
